@@ -1,23 +1,25 @@
 use crate::prelude::*;
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Debug)]
 pub struct Message {
-	#[serde(serialize_with="se_instant",deserialize_with="de_instant")]
-	pub time: Instant,
+	pub from: PublicKey,
+	//#[serde(serialize_with="se_instant",deserialize_with="de_instant")]
+	pub time: SystemTime,
 	pub typ: MessageType,
 }
 
-#[derive(Serialize,Deserialize)]
-#[derive(Copy,Clone)]
-pub struct GroupId(u64);
+impl Message {
+	pub fn hash(&self) -> [u8; HASH_SIZE] {
+		hash(&serialize(self))
+	}
+}
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Debug)]
 pub enum MessageType {
-	Message(Vec<u8>),
+	Message(String),
 	Received([u8; HASH_SIZE]),
-	Seen([u8; HASH_SIZE]),
-	NewGroup(GroupId, String),
-	RequestPeer(PublicKey),
-	Ping(PublicKey, IpAddr),
-	Pong,
+	//Seen([u8; HASH_SIZE]),
+	//NewGroup(GroupId, String),
+	Rename(String),
+	RequestPeer(PublicKey, IpAddr),
 }

@@ -12,7 +12,7 @@ mod hash;
 mod crypto;
 use terminal_command::*;
 
-const TARGET_PEERS: usize = 8;
+//const TARGET_PEERS: usize = 8;
 
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
@@ -35,15 +35,17 @@ fn main() {
 			return;
 		}
 	}
-	match read_file(format!("{}/{}",settings().folder,"settings.toml")) {
+	match read_file(format!("{}/settings.ron",settings().folder)) {
 		Ok(x) => unsafe { SETTINGS = x; },
-		Err(e) => println!("couldn't read settings: {}, using default",e),
+		Err(e) => {
+			println!("couldn't read settings: {}, using default",e);
+			let _ = write_file(settings(), format!("{}/settings.ron",settings().folder));
+		},
 	}
-	//let mut write_settings = false;
-	let socket = match UdpSocket::bind(("0.0.0.0", PORT)).and_then(|x| x.set_nonblocking(true).map(|_| x)) {
+	let socket = match UdpSocket::bind(("0.0.0.0", INPORT)).and_then(|x| x.set_nonblocking(true).map(|_| x)) {
 		Ok(x) => x,
 		Err(e) => {
-			println!("couldn't bind to port {}: {}",PORT,e);
+			println!("couldn't bind to port {}: {}",INPORT,e);
 			return;
 		},
 	};
@@ -58,97 +60,180 @@ fn main() {
 		},
 	};
 	let (priv_key, pub_key) = PrivateKey::from_phrase(passphrase.as_bytes());
-	let peers: HashMap<IpAddr, Peer> = peers.into_iter().map(|x| (x.ip, x)).collect();
-	write_peers(&peers).unwrap();
-	let peers: Vec<Peer> = match read_file(format!("{}/{}",settings().folder,"peers.toml")) {
+	/*let peers = vec![ //create a default peer file to be given to other people for bootstrapping
+		Peer {
+			ip: std::net::Ipv4Addr::new(0,0,0,0).into(),
+			key: pub_key.clone(),
+			last_online: SystemTime::now(),
+			relative_key: Default::default(),
+		}
+	];
+	write_file(&peers, format!("{}/peers.ron",settings().folder)).unwrap();*/
+	let mut peers: Vec<Peer> = match read_file(format!("{}/peers.ron",settings().folder)) {
 		Ok(x) => x,
 		Err(e) => {
 			println!("couldn't read peers file: {}",e);
 			return;
 		},
 	};
-	let mut peers: HashMap<IpAddr, Peer> = peers.into_iter().map(|x| (x.ip, x)).collect();
 	//TODO: check whether the error was due to permissions or the file not existing
-	let _messages: Vec<RecvedMsg> = read_file(format!("{}/{}",settings().folder,"messages.toml")).unwrap_or(Vec::new());
+	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or(Vec::new());
+	packets.iter_mut().for_each(|p| p.relative_key = p.to.relative_to(&pub_key));
 	let terminal = terminal::Terminal::start();
 	let mut limiter = limiter::Limiter::from_tps(100.0);
-	let mut last_punch = Instant::now() - Duration::from_secs(settings().punch_delay as u64 + 1);
-	let mut buf = Vec::new();
+	let mut last_punch = SystemTime::now() - Duration::from_secs(settings().punch_delay);
 	let mut connected = Vec::new();
 	let mut connected_map = HashMap::new();
 	'a: loop {
+		let mut buf = Vec::new();
 		while let Ok((len, addr)) = socket.recv_from(&mut buf) {
 			if len > 0 {
 				println!("recved: {:?}",buf);
-				if let Some(_packet) = Packet::from_bytes(&buf, &priv_key) {
-					unimplemented!()
-				} else if !connected_map.contains_key(&addr.ip()) {
-					if let Some(peer) = peers.get_mut(&addr.ip()) {
-						peer.relative_key = peer.key.relative_to(pub_key);
-						connected_map.insert(addr.ip(), peer.clone());
-						connected.push(peer.clone());
-						connected.sort_unstable_by_key(|x| x.relative_key);
+			}
+			if let Some(packet) = Packet::from_bytes(&buf, &priv_key, &pub_key) {
+				if packet.to == pub_key {
+					if let Some(msg) = packet.decrypt(&priv_key) {
+						//TODO: confirm that it's correctly signed
+						println!("raw message: {:?}",msg);
+						if let MessageType::Message(text) = &msg.typ {
+							for i in 0..friends.len() {
+								if friends[i].key == msg.from {
+									print!("msg from {}",friends[i].name);
+									break;
+								}
+							}
+							println!(": {}",text);
+						}
+						if let MessageType::Received(_hash) = &msg.typ {
+							//TODO
+						} else {
+							let return_msg = Message {
+								from: pub_key.clone(),
+								time: SystemTime::now(),
+								typ: MessageType::Received(msg.hash()),
+							};
+							let packet = Packet::encrypt((&priv_key, &pub_key), msg.from.clone(), &return_msg);
+							packets.push(packet);
+						}
+						messages.push(msg);
 					}
+				} else {
+					unimplemented!()
+				}
+			} else if !connected_map.contains_key(&addr.ip()) {
+				let mut i = 0;
+				while i < peers.len() && peers[i].ip != addr.ip() {
+					i += 1;
+				}
+				if i < peers.len() {
+					peers[i].relative_key = peers[i].key.relative_to(&pub_key);
+					connected_map.insert(addr.ip(), peers[i].clone());
+					connected.push(peers[i].clone());
+					connected.sort_unstable_by_key(|x| x.relative_key);
 				}
 			}
 			buf = Vec::new();
 		}
-		for command in terminal.try_iter() {
+		'b: for command in terminal.try_iter() {
 			match command {
 				Stop => break 'a,
 				WritePubKey(path) => {
-					let path = path.unwrap_or(format!("{}/{}",settings().folder,"pub_key.txt"));
+					let path = path.unwrap_or(format!("{}/pub_key.txt",settings().folder));
 					match std::fs::write(&path, serialize(&pub_key)) {
 						Ok(()) => println!("wrote public key to {}",path),
 						Err(e) => println!("failed to write public key to {}: {}",path,e),
 					}
 				},
+				SendMsg(target, msg) => {
+					for friend in friends.iter_mut() {
+						if friend.name == target {
+							let msg = Message {
+								from: pub_key.clone(),
+								time: SystemTime::now(),
+								typ: MessageType::Message(msg),
+							};
+							let packet = Packet::encrypt((&priv_key, &pub_key), friend.key.clone(), &msg);
+							packets.push(packet);
+						}
+						break 'b;
+					}
+					println!("no friend found with name: {}",target);
+				}
 			}
 		}
-		if Instant::now() - last_punch < Duration::from_secs(settings().punch_delay as u64) {
-			last_punch = Instant::now();
-			for peer in peers.values() {
+		if last_punch.elapsed().unwrap() > Duration::from_secs(settings().punch_delay) {
+			last_punch = SystemTime::now();
+			for peer in peers.iter() {
 				if let Err(e) = peer.punch(&socket) {
 					println!("error punching {}: {}",peer.ip,e);
 				}
 			}
-			if connected.len() < TARGET_PEERS {
-				unimplemented!()
+		}
+		if connected.len() > 0 {
+			for packet in packets.iter_mut() {
+				if SystemTime::now() > packet.last_sent + Duration::from_secs(settings().resend_delay) {
+					let mut i = connected.len() - 1;
+					while connected[i].relative_key > packet.relative_key && i != 0 {
+						i -= 1;
+					}
+					if connected[i].relative_key < packet.relative_key {
+						match connected[i].send(&socket, &packet, &pub_key) {
+							Ok(()) => packet.last_sent = SystemTime::now(),
+							Err(e) => println!("error sending packet to {}: {}",connected[i].ip,e),
+						}
+					}
+				}
 			}
 		}
 		limiter.sleep();
 	}
-	if let Err(e) = write_peers(&peers) {
+	if let Err(e) = write_file(&peers, format!("{}/peers.ron",settings().folder)) {
 		println!("error writing peers: {}",e);
+	}
+	if let Err(e) = write_file(&messages, format!("{}/messages.ron",settings().folder)) {
+		println!("error writing messages: {}",e);
+	}
+	if let Err(e) = write_file(&friends, format!("{}/friends.ron",settings().folder)) {
+		println!("error writing friends: {}",e);
 	}
 }
 
 fn settings_folder() -> &'static str {
 	settings().folder
 }
-#[derive(Deserialize)]
+#[derive(Serialize,Deserialize)]
 pub struct Settings {
 	#[serde(skip,default="settings_folder")]
 	pub folder: &'static str,
-	pub punch_delay: u16,
+	pub punch_delay: u64,
+	pub resend_delay: u64,
+	pub username: String,
 }
 static mut SETTINGS: Settings = Settings {
 	folder: ".sufec",
 	punch_delay: 30,
+	resend_delay: 10,
+	username: String::new(),
 };
 pub fn settings() -> &'static Settings {
 	unsafe { &SETTINGS }
 }
 
 fn read_file<T: DeserializeOwned>(path: String) -> Result<T> {
-	let mut f = File::open(path)?;
-	let mut r = Vec::new();
-	f.read_to_end(&mut r)?;
-	Ok(toml::from_slice(&r)?)
+	let f = File::open(path)?;
+	Ok(ron::de::from_reader(f)?)
+}
+
+fn write_file<T: Serialize>(t: &T, path: String) -> Result<()> {
+	let f = File::create(path)?;
+	ron::ser::to_writer_pretty(f, t, Default::default())?;
+	Ok(())
 }
 
 fn create_passphrase() -> Result<String> {
-	let path = format!("{}/{}",settings().folder,"passphrase.txt");
+	let path = format!("{}/passphrase.txt",settings().folder);
 	use std::io::stdin;
 	let mut readable = None;
 	while readable.is_none() {
@@ -179,21 +264,4 @@ fn create_passphrase() -> Result<String> {
 	f.write_all(r.as_bytes())?;
 	println!("wrote passphrase to {}",path);
 	Ok(r)
-}
-
-fn write_peers(peers: &HashMap<IpAddr, Peer>) -> Result<()> {
-	let mut ops = OpenOptions::new();
-	let ops = ops.create(true).write(true);
-	let mut f = ops.open(format!("{}/{}",settings().folder,"peers.toml"))?;
-	f.write_all(toml::to_string_pretty(&peers)?.as_bytes())?;
-	Ok(())
-}
-
-#[derive(Serialize,Deserialize)]
-struct RecvedMsg {
-	#[serde(serialize_with="se_instant",deserialize_with="de_instant")]
-	time: Instant,
-	from: PublicKey,
-	target: GroupId,
-	content: String,
 }
