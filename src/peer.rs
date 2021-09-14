@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
-pub const INPORT: u16 = 36108;
-pub const OUTPORT: u16 = 36107; //these are just different for testing, for actual use they should be merged
+pub const IN_PORT: u16 = 36107;
+pub const OUTPORT: u16 = 36108; //these are just different for testing with 2 clients on the same computer, for actual use they should be merged
 
 #[derive(Clone,Serialize,Deserialize)]
 pub struct Peer {
@@ -21,6 +21,7 @@ impl Peer {
 	
 	pub fn send(&self, socket: &UdpSocket, packet: &Packet, key: &PublicKey) -> Result<()> {
 		let bytes = packet.to_bytes(key);
+		println!("sending {} bytes",bytes.len());
 		socket.send_to(&bytes, (self.ip, OUTPORT))?;
 		Ok(())
 	}

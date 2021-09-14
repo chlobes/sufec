@@ -1,3 +1,5 @@
+//this could be more efficient if we switched to u64
+
 pub const HASH_BYTES: usize = 32;
 
 const BLOCK_WORDS: usize = 64;

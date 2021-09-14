@@ -42,20 +42,20 @@ fn main() {
 			let _ = write_file(settings(), format!("{}/settings.ron",settings().folder));
 		},
 	}
-	let socket = match UdpSocket::bind(("0.0.0.0", INPORT)).and_then(|x| x.set_nonblocking(true).map(|_| x)) {
+	let socket = match UdpSocket::bind(("0.0.0.0", IN_PORT)).and_then(|x| x.set_nonblocking(true).map(|_| x)) {
 		Ok(x) => x,
 		Err(e) => {
-			println!("couldn't bind to port {}: {}",INPORT,e);
+			println!("couldn't bind to port {}: {}",IN_PORT,e);
 			return;
 		},
 	};
-	let passphrase = match std::fs::read_to_string(format!("{}/{}",settings().folder,"passphrase.txt")).or_else(|e| {
-		println!("couldn't create passphrase: {}",e);
+	let passphrase = match std::fs::read_to_string(format!("{}/passphrase.txt",settings().folder)).or_else(|e| {
+		println!("couldn't read passphrase: {}",e);
 		create_passphrase()
 	}) {
 		Ok(x) => x,
 		Err(e) => {
-			println!("couldn't write passphrase to {}: {}",format!("{}/{}",settings().folder,"passphrase.txt"),e);
+			println!("couldn't write passphrase to {}: {}",format!("{}/passphrase.txt",settings().folder),e);
 			return;
 		},
 	};
@@ -79,6 +79,7 @@ fn main() {
 	//TODO: check whether the error was due to permissions or the file not existing
 	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or(Vec::new());
 	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut sent_messages: Vec<Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or(Vec::new());
 	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or(Vec::new());
 	packets.iter_mut().for_each(|p| p.relative_key = p.to.relative_to(&pub_key));
 	let terminal = terminal::Terminal::start();
@@ -86,13 +87,14 @@ fn main() {
 	let mut last_punch = SystemTime::now() - Duration::from_secs(settings().punch_delay);
 	let mut connected = Vec::new();
 	let mut connected_map = HashMap::new();
+	let mut buf = vec![0; MAX_PACKET_BYTES];
 	'a: loop {
-		let mut buf = Vec::new();
 		while let Ok((len, addr)) = socket.recv_from(&mut buf) {
-			if len > 0 {
-				println!("recved: {:?}",buf);
+			if len != 0 {
+				println!("packet len {}",len);
 			}
-			if let Some(packet) = Packet::from_bytes(&buf, &priv_key, &pub_key) {
+			buf.truncate(len);
+			if let Some(packet) = Packet::from_bytes(buf, &priv_key, &pub_key) {
 				if packet.to == pub_key {
 					if let Some(msg) = packet.decrypt(&priv_key) {
 						//TODO: confirm that it's correctly signed
@@ -107,7 +109,8 @@ fn main() {
 							println!(": {}",text);
 						}
 						if let MessageType::Received(_hash) = &msg.typ {
-							//TODO
+							//TODO: stop spamming that message
+							//TODO: consider sending a garbage message to reduce trackability
 						} else {
 							let return_msg = Message {
 								from: pub_key.clone(),
@@ -123,6 +126,7 @@ fn main() {
 					unimplemented!()
 				}
 			} else if !connected_map.contains_key(&addr.ip()) {
+				println!("recved connection from {}",addr.ip());
 				let mut i = 0;
 				while i < peers.len() && peers[i].ip != addr.ip() {
 					i += 1;
@@ -134,14 +138,14 @@ fn main() {
 					connected.sort_unstable_by_key(|x| x.relative_key);
 				}
 			}
-			buf = Vec::new();
+			buf = vec![0; MAX_PACKET_BYTES];
 		}
 		'b: for command in terminal.try_iter() {
 			match command {
 				Stop => break 'a,
 				WritePubKey(path) => {
-					let path = path.unwrap_or(format!("{}/pub_key.txt",settings().folder));
-					match std::fs::write(&path, serialize(&pub_key)) {
+					let path = path.unwrap_or(format!("{}/pub_key.ron",settings().folder));
+					match write_file(&pub_key, path.clone()) {
 						Ok(()) => println!("wrote public key to {}",path),
 						Err(e) => println!("failed to write public key to {}: {}",path,e),
 					}
@@ -154,7 +158,10 @@ fn main() {
 								time: SystemTime::now(),
 								typ: MessageType::Message(msg),
 							};
+							println!("sending: {:?}",msg);
 							let packet = Packet::encrypt((&priv_key, &pub_key), friend.key.clone(), &msg);
+							println!("packet hash: {:?}",&hash(&packet.data)[0..5]);
+							sent_messages.push(packet.clone());
 							packets.push(packet);
 						}
 						break 'b;
@@ -174,14 +181,16 @@ fn main() {
 		if connected.len() > 0 {
 			for packet in packets.iter_mut() {
 				if SystemTime::now() > packet.last_sent + Duration::from_secs(settings().resend_delay) {
+					println!("sending packet: {:?}",&hash(&packet.data)[0..5]);
+					packet.last_sent = SystemTime::now();
 					let mut i = connected.len() - 1;
 					while connected[i].relative_key > packet.relative_key && i != 0 {
 						i -= 1;
 					}
-					if connected[i].relative_key < packet.relative_key {
-						match connected[i].send(&socket, &packet, &pub_key) {
-							Ok(()) => packet.last_sent = SystemTime::now(),
-							Err(e) => println!("error sending packet to {}: {}",connected[i].ip,e),
+					if connected[i].relative_key <= packet.relative_key {
+						println!("sending packet to {}",connected[i].ip);
+						if let Err(e) = connected[i].send(&socket, &packet, &pub_key) {
+							println!("error sending packet to {}: {}",connected[i].ip,e);
 						}
 					}
 				}
@@ -189,11 +198,17 @@ fn main() {
 		}
 		limiter.sleep();
 	}
+	if connected.len() > 0 { //dump all the packets we're holding onto
+		packets.iter().for_each(|x| { let _ = connected[0].send(&socket, x, &pub_key); });
+	}
 	if let Err(e) = write_file(&peers, format!("{}/peers.ron",settings().folder)) {
 		println!("error writing peers: {}",e);
 	}
 	if let Err(e) = write_file(&messages, format!("{}/messages.ron",settings().folder)) {
 		println!("error writing messages: {}",e);
+	}
+	if let Err(e) = write_file(&sent_messages, format!("{}/sent_messages.ron",settings().folder)) {
+		println!("error writing sent_messages: {}",e);
 	}
 	if let Err(e) = write_file(&friends, format!("{}/friends.ron",settings().folder)) {
 		println!("error writing friends: {}",e);
@@ -213,8 +228,8 @@ pub struct Settings {
 }
 static mut SETTINGS: Settings = Settings {
 	folder: ".sufec",
-	punch_delay: 30,
-	resend_delay: 10,
+	punch_delay: 5,
+	resend_delay: 2,
 	username: String::new(),
 };
 pub fn settings() -> &'static Settings {
@@ -228,7 +243,7 @@ fn read_file<T: DeserializeOwned>(path: String) -> Result<T> {
 
 fn write_file<T: Serialize>(t: &T, path: String) -> Result<()> {
 	let f = File::create(path)?;
-	ron::ser::to_writer_pretty(f, t, Default::default())?;
+	ron::ser::to_writer_pretty(f, t, ron::ser::PrettyConfig::default().with_depth_limit(3))?;
 	Ok(())
 }
 
