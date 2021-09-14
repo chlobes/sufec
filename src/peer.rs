@@ -35,11 +35,11 @@ pub struct Friend {
 }
 
 /*impl Friend {
-	pub fn confirm_recved(&self, _hash: [u8; HASH_SIZE], _socket: &UdpSocket) {
+	pub fn confirm_recved(&self, _hash: [u8; HASH_BYTES], _socket: &UdpSocket) {
 		unimplemented!()
 	}
 	
-	pub fn confirm_seen(&self, _hash: [u8; HASH_SIZE], _socket: &UdpSocket) {
+	pub fn confirm_seen(&self, _hash: [u8; HASH_BYTES], _socket: &UdpSocket) {
 		unimplemented!()	
 	}
 }*/

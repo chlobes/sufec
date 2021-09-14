@@ -5,7 +5,7 @@ pub use crate::hash::*;
 use rsa::{PublicKey as RsaPublicKeyTrait,RsaPrivateKey,RsaPublicKey,PaddingScheme};
 
 pub const KEY_BITS: usize = 2048;
-pub const SIGNATURE_SIZE: usize = 64;
+pub const SIGNATURE_BYTES: usize = 64;
 
 pub struct PrivateKey(RsaPrivateKey);
 #[derive(Clone,Serialize,Deserialize,Eq,PartialEq,Debug)]
@@ -20,8 +20,8 @@ impl PrivateKey {
 		(PrivateKey(s), p)
 	}
 	
-	pub fn sign(&self, _data: &[u8]) -> [u8; SIGNATURE_SIZE] { //TODO
-		[0; SIGNATURE_SIZE]
+	pub fn sign(&self, _data: &[u8]) -> [u8; SIGNATURE_BYTES] { //TODO
+		[0; SIGNATURE_BYTES]
 	}
 	
 	pub fn decrypt(&self, data: &[u8]) -> Vec<u8> {
@@ -38,16 +38,16 @@ impl PublicKey {
 		self.0.encrypt(&mut rng, padding, data).expect("failed to encrypt")
 	}
 	
-	pub fn verify(&self, _signature: [u8; SIGNATURE_SIZE], _data: &[u8]) -> bool { //TODO
+	pub fn verify(&self, _signature: [u8; SIGNATURE_BYTES], _data: &[u8]) -> bool { //TODO
 		true
 	}
 	
 	pub fn relative_to(&self, other: &Self) -> [u8; 32] {
-		let mut r = [0; HASH_SIZE];
+		let mut r = [0; HASH_BYTES];
 		let a = hash(&serialize(&self.0));
 		let b = hash(&serialize(&other.0));
 		let mut carry = 0;
-		for i in (0..HASH_SIZE).rev() {
+		for i in (0..HASH_BYTES).rev() {
 			let (v, c1) = a[i].overflowing_sub(b[i]);
 			let (v, c2) = v.overflowing_sub(carry);
 			r[i] = v;

@@ -9,7 +9,7 @@ pub struct Message {
 }
 
 impl Message {
-	pub fn hash(&self) -> [u8; HASH_SIZE] {
+	pub fn hash(&self) -> [u8; HASH_BYTES] {
 		hash(&serialize(self))
 	}
 }
@@ -17,8 +17,8 @@ impl Message {
 #[derive(Serialize,Deserialize,Debug)]
 pub enum MessageType {
 	Message(String),
-	Received([u8; HASH_SIZE]),
-	//Seen([u8; HASH_SIZE]),
+	Received([u8; HASH_BYTES]),
+	//Seen([u8; HASH_BYTES]),
 	//NewGroup(GroupId, String),
 	Rename(String),
 	RequestPeer(PublicKey, IpAddr),

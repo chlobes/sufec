@@ -1,6 +1,6 @@
-pub const HASH_SIZE: usize = 32;
+pub const HASH_BYTES: usize = 32;
 
-const BLOCK_SIZE: usize = 64;
+const BLOCK_WORDS: usize = 64;
 const INITIAL_STATE: [u32; 8] = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225];
 const HASH_CONSTANTS: [u32; 64] = [
 	1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
@@ -13,9 +13,9 @@ const HASH_CONSTANTS: [u32; 64] = [
 	1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298,
 ];
 
-pub fn hash(data: &[u8]) -> [u8; HASH_SIZE] {
+pub fn hash(data: &[u8]) -> [u8; HASH_BYTES] {
 	let mut state = INITIAL_STATE;
-	let iter = data.chunks_exact(BLOCK_SIZE);
+	let iter = data.chunks_exact(BLOCK_WORDS);
 	let remainder = iter.remainder();
 	for chunk in iter {
 		process_chunk(&mut state, chunk);
@@ -24,23 +24,23 @@ pub fn hash(data: &[u8]) -> [u8; HASH_SIZE] {
 	//this can be done for exact adherence to sha2, but just xoring the length is faster and simpler
 	let mut last: Vec<_> = iter.remainder().iter().cloned().collect();
 	last.push(128);
-	while (last.len() + BLOCK_SIZE) % BLOCK_SIZE != (BLOCK_SIZE - std::mem::size_of::<u64>()) {
+	while (last.len() + BLOCK_WORDS) % BLOCK_WORDS != (BLOCK_WORDS - std::mem::size_of::<u64>()) {
 		last.push(0);
 	}
 	last.extend_from_slice(&(data.len() as u64 * 8).to_be_bytes());
-	for chunk in last.chunks_exact(BLOCK_SIZE) {
+	for chunk in last.chunks_exact(BLOCK_WORDS) {
 		process_chunk(&mut state, &last);
 	}
 	*/
-	let mut last = [0; BLOCK_SIZE];
+	let mut last = [0; BLOCK_WORDS];
 	for i in 0..remainder.len() {
 		last[i] = remainder[i];
 	}
 	for i in 0..8 {
-		last[BLOCK_SIZE+i-8] ^= (data.len() as u64).to_be_bytes()[i];
+		last[BLOCK_WORDS+i-8] ^= (data.len() as u64).to_be_bytes()[i];
 	}
 	process_chunk(&mut state, &last);
-	let mut result = [0; HASH_SIZE];
+	let mut result = [0; HASH_BYTES];
 	for i in 0..8 {
 		for j in 0..4 {
 			result[i*4+j] = state[i].to_be_bytes()[j];

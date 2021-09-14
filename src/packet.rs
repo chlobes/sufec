@@ -1,12 +1,12 @@
 use crate::prelude::*;
 
-pub const PACKET_SIZE: usize = 512;
+pub const PACKET_BYTES: usize = 512;
 
 #[derive(Clone,Serialize,Deserialize)]
 pub struct Packet {
 	pub to: PublicKey,
 	#[serde(skip)]
-	pub relative_key: [u8; HASH_SIZE],
+	pub relative_key: [u8; HASH_BYTES],
 	pub data: Vec<u8>,
 	#[serde(skip,default="SystemTime::now")]
 	pub last_sent: SystemTime,
@@ -33,15 +33,11 @@ impl Packet {
 	
 	pub fn decrypt(&self, key: &PrivateKey) -> Option<Message> { //decypt inner message (1st layer)
 		let mut data = key.decrypt(&self.data);
-		let mut signature = [0; SIGNATURE_SIZE];
+		let mut signature = [0; SIGNATURE_BYTES];
 		if data.len() > signature.len() {
 			for i in (0..signature.len()).rev() {
 				signature[i] = data.pop().unwrap();
 			}
-			use flate2::read::DeflateDecoder;
-			let mut d = DeflateDecoder::new(data.as_slice());
-			let mut data = Vec::new();
-			let _ = d.read_to_end(&mut data);
 			if let Ok(message) = deserialize::<Message>(&data) {
 				if message.from.verify(signature, &data) {
 					Some(message)
@@ -58,10 +54,6 @@ impl Packet {
 	
 	pub fn encrypt(from: (&PrivateKey, &PublicKey), to: PublicKey, msg: &Message) -> Self { //encrypt the inner message and construct a packet out of it (1st layer)
 		let mut data = serialize(msg);
-		use flate2::{Compression,write::DeflateEncoder};
-		let mut e = DeflateEncoder::new(Vec::new(), Compression::best());
-		e.write_all(&data).unwrap();
-		let mut data = e.finish().unwrap();
 		let signature = from.0.sign(&data);
 		data.extend_from_slice(&signature);
 		let data = to.encrypt(&data);
