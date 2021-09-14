@@ -2,12 +2,10 @@
 
 use prelude::*;
 mod prelude;
-#[allow(unused)]
 mod packet;
 mod message;
 mod peer;
 mod terminal_command;
-#[allow(unused)]
 mod hash;
 mod crypto;
 use terminal_command::*;
@@ -79,7 +77,7 @@ fn main() {
 	//TODO: check whether the error was due to permissions or the file not existing
 	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or(Vec::new());
 	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or(Vec::new());
-	let mut sent_messages: Vec<Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut sent_messages: HashMap<[u8; HASH_BYTES], Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or(HashMap::new());
 	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or(Vec::new());
 	packets.iter_mut().for_each(|p| p.relative_key = p.to.relative_to(&pub_key));
 	let terminal = terminal::Terminal::start();
@@ -93,37 +91,45 @@ fn main() {
 			if len != 0 {
 				println!("packet len {}",len);
 			}
-			buf.truncate(len);
-			if let Some(packet) = Packet::from_bytes(buf, &priv_key, &pub_key) {
-				if packet.to == pub_key {
-					if let Some(msg) = packet.decrypt(&priv_key) {
-						//TODO: confirm that it's correctly signed
-						println!("raw message: {:?}",msg);
-						if let MessageType::Message(text) = &msg.typ {
-							for i in 0..friends.len() {
-								if friends[i].key == msg.from {
-									print!("msg from {}",friends[i].name);
-									break;
+			if let Ok(raw_packet) = deserialize::<RawPacket>(&buf) {
+				println!("got raw packet {}",raw_packet.data.len());
+				if let Some(packet) = raw_packet.decrypt(&priv_key) {
+					println!("got packet {}",packet.data.len());
+					if packet.to == pub_key {
+						println!("got packet meant for us");
+						if let Some(msg) = packet.decrypt(&priv_key) {
+							if let MessageType::Message(text) = &msg.typ {
+								for i in 0..friends.len() {
+									if friends[i].key == msg.from {
+										print!("msg from {}",friends[i].name);
+										break;
+									}
 								}
+								println!(": {}",text);
 							}
-							println!(": {}",text);
+							if let MessageType::Received(hash) = &msg.typ {
+								if let Some(packet) = sent_messages.get(hash) {
+									if packet.to == msg.from {
+										sent_messages.remove(hash);
+									}
+								}
+								//TODO: consider sending a garbage message to reduce trackability
+							} else {
+								let mut return_msg = Message {
+									from: pub_key.clone(),
+									time: SystemTime::now(),
+									typ: MessageType::Received(msg.hash()),
+									signature: [0; SIGNATURE_BYTES],
+								};
+								return_msg.signature = priv_key.sign(&return_msg.hash(), &msg.from);
+								let packet = Packet::encrypt(msg.from.clone(), &return_msg);
+								packets.push(packet);
+							}
+							messages.push(msg);
 						}
-						if let MessageType::Received(_hash) = &msg.typ {
-							//TODO: stop spamming that message
-							//TODO: consider sending a garbage message to reduce trackability
-						} else {
-							let return_msg = Message {
-								from: pub_key.clone(),
-								time: SystemTime::now(),
-								typ: MessageType::Received(msg.hash()),
-							};
-							let packet = Packet::encrypt((&priv_key, &pub_key), msg.from.clone(), &return_msg);
-							packets.push(packet);
-						}
-						messages.push(msg);
+					} else {
+						packets.push(packet);
 					}
-				} else {
-					unimplemented!()
 				}
 			} else if !connected_map.contains_key(&addr.ip()) {
 				println!("recved connection from {}",addr.ip());
@@ -153,15 +159,17 @@ fn main() {
 				SendMsg(target, msg) => {
 					for friend in friends.iter_mut() {
 						if friend.name == target {
-							let msg = Message {
+							let mut msg = Message {
 								from: pub_key.clone(),
 								time: SystemTime::now(),
 								typ: MessageType::Message(msg),
+								signature: [0; SIGNATURE_BYTES],
 							};
+							let hash = msg.hash();
+							msg.signature = priv_key.sign(&hash, &friend.key);
 							println!("sending: {:?}",msg);
-							let packet = Packet::encrypt((&priv_key, &pub_key), friend.key.clone(), &msg);
-							println!("packet hash: {:?}",&hash(&packet.data)[0..5]);
-							sent_messages.push(packet.clone());
+							let packet = Packet::encrypt(friend.key.clone(), &msg);
+							sent_messages.insert(hash, packet.clone());
 							packets.push(packet);
 						}
 						break 'b;
@@ -181,7 +189,6 @@ fn main() {
 		if connected.len() > 0 {
 			for packet in packets.iter_mut() {
 				if SystemTime::now() > packet.last_sent + Duration::from_secs(settings().resend_delay) {
-					println!("sending packet: {:?}",&hash(&packet.data)[0..5]);
 					packet.last_sent = SystemTime::now();
 					let mut i = connected.len() - 1;
 					while connected[i].relative_key > packet.relative_key && i != 0 {
@@ -189,7 +196,7 @@ fn main() {
 					}
 					if connected[i].relative_key <= packet.relative_key {
 						println!("sending packet to {}",connected[i].ip);
-						if let Err(e) = connected[i].send(&socket, &packet, &pub_key) {
+						if let Err(e) = connected[i].send(&socket, packet) {
 							println!("error sending packet to {}: {}",connected[i].ip,e);
 						}
 					}
@@ -199,7 +206,7 @@ fn main() {
 		limiter.sleep();
 	}
 	if connected.len() > 0 { //dump all the packets we're holding onto
-		packets.iter().for_each(|x| { let _ = connected[0].send(&socket, x, &pub_key); });
+		packets.iter().for_each(|x| { let _ = connected[0].send(&socket, x); });
 	}
 	if let Err(e) = write_file(&peers, format!("{}/peers.ron",settings().folder)) {
 		println!("error writing peers: {}",e);

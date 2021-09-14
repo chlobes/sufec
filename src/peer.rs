@@ -7,7 +7,6 @@ pub const OUTPORT: u16 = 36108; //these are just different for testing with 2 cl
 pub struct Peer {
 	pub key: PublicKey,
 	pub ip: IpAddr,
-	//#[serde(serialize_with="se_instant",deserialize_with="de_instant")]
 	pub last_online: SystemTime,
 	#[serde(skip)]
 	pub relative_key: [u8; 32],
@@ -19,8 +18,9 @@ impl Peer {
 		Ok(())
 	}
 	
-	pub fn send(&self, socket: &UdpSocket, packet: &Packet, key: &PublicKey) -> Result<()> {
-		let bytes = packet.to_bytes(key);
+	pub fn send(&self, socket: &UdpSocket, packet: &Packet) -> Result<()> {
+		let raw = RawPacket::encrypt(packet, &self.key);
+		let bytes = serialize(&raw);
 		println!("sending {} bytes",bytes.len());
 		socket.send_to(&bytes, (self.ip, OUTPORT))?;
 		Ok(())

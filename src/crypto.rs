@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use std::convert::TryInto;
 
 pub use crate::hash::*;
 
@@ -16,13 +15,9 @@ pub struct PrivateKey(RsaPrivateKey);
 pub struct PublicKey(RsaPublicKey);
 
 #[derive(Copy,Clone,Eq,PartialEq)]
-pub struct SymmetricKey([u8; SYMMETRIC_KEY_BYTES]);
+pub struct SymmetricKey(pub [u8; SYMMETRIC_KEY_BYTES]);
 
 impl PrivateKey {
-	pub fn min_decrypt_len(&self) -> usize {
-		KEY_BYTES
-	}
-	
 	pub fn from_phrase(data: &[u8]) -> (Self, PublicKey) {
 		let mut rng = StdRng::from_seed(hash(data));
 		let s = RsaPrivateKey::new(&mut rng, KEY_BITS).expect("failed to generate rsa private key");
@@ -34,39 +29,21 @@ impl PrivateKey {
 		[0; SIGNATURE_BYTES]
 	}
 	
-	pub fn decrypt(&self, mut data: Vec<u8>) -> Option<Vec<u8>> {
-		println!("before decryption {}: {:?}",data.len(),data);
-		let mut symm_key = [0; KEY_BYTES];
-		if data.len() < symm_key.len() { return None; }
-		for i in (0..symm_key.len()).rev() {
-			symm_key[i] = data.pop().unwrap();
-		}
+	pub fn decrypt(&self, data: &[u8]) -> Option<Vec<u8>> {
 		let padding = PaddingScheme::new_pkcs1v15_encrypt();
-		if let Some(symm_key) = self.0.decrypt(padding, &symm_key).ok().and_then(|x| x[..].try_into().ok()) {
-			let data = SymmetricKey(symm_key).decrypt(&data);
-			println!("after decryption {}: {:?}",data.len(),data);
-			Some(SymmetricKey(symm_key).decrypt(&data))
-		} else {
-			None
-		}
+		self.0.decrypt(padding, &data).ok()
 	}
 }
 
 impl PublicKey {
 	pub fn encrypt(&self, data: &[u8]) -> Vec<u8> {
-		println!("before encryption {}: {:?}",data.len(),data);
-		let mut rng = OsRng;
-		let symm_key = SymmetricKey::new(&mut rng);
 		let padding = PaddingScheme::new_pkcs1v15_encrypt();
-		let mut data = symm_key.encrypt(data);
-		let symm_key = self.0.encrypt(&mut rng, padding, &symm_key.0).expect("failed to encrypt");
-		debug_assert!(symm_key.len() == KEY_BYTES);
-		data.extend_from_slice(&symm_key);
-		println!("after encryption {}: {:?}",data.len(),data);
+		let data = self.0.encrypt(&mut OsRng, padding, data).expect("failed to encrypt");
+		debug_assert!(data.len() == KEY_BYTES);
 		data
 	}
 	
-	pub fn verify(&self, _signature: [u8; SIGNATURE_BYTES], _data: &[u8]) -> bool { //TODO
+	pub fn verify(&self, _signature: [u8; SIGNATURE_BYTES], _data: &[u8], _to: &PublicKey) -> bool { //TODO
 		true
 	}
 	
@@ -83,25 +60,19 @@ impl PublicKey {
 		}
 		r
 	}
-	
-	pub fn pop_bytes(buf: &mut Vec<u8>) -> Self {
-		let mut r = [0; KEY_BYTES];
-		for i in (0..r.len()).rev() {
-			r[i] = buf.pop().unwrap();
-		}
-		deserialize(&r).expect("failed to deserialize rsa public key")
-	}
-	
-	pub fn push_bytes(&self, buf: &mut Vec<u8>) {
-		buf.extend_from_slice(&serialize(self));
-	}
 }
 
 impl SymmetricKey {
-	pub fn new<R: Rng>(rng: &mut R) -> Self {
+	pub fn new() -> Self {
 		let mut r = SymmetricKey(Default::default());
-		rng.fill(&mut r.0);
+		OsRng.fill(&mut r.0);
 		r
+	}
+	
+	pub fn from_buf(buf: &[u8], key: &PrivateKey) -> Option<Self> {
+		key.decrypt(buf)
+			.and_then(|buf| buf.try_into().ok())
+			.map(|buf| SymmetricKey(buf))
 	}
 	
 	pub fn encrypt(mut self, data: &[u8]) -> Vec<u8> {

@@ -2,50 +2,32 @@ use crate::prelude::*;
 
 pub const MAX_PACKET_BYTES: usize = 1472;
 
+fn last_sent() -> SystemTime {
+	SystemTime::now() - Duration::from_secs(settings().resend_delay + 1)
+}
+
 #[derive(Clone,Serialize,Deserialize)]
-pub struct Packet {
+pub struct Packet { //layer 1 encryption
 	pub to: PublicKey,
+	#[serde(with="serde_256_array")]
+	pub symm_key: [u8; KEY_BYTES], //symm key encrypted with to's public key
+	pub data: Vec<u8>, //message encrypted with symm_key
 	#[serde(skip)]
 	pub relative_key: [u8; HASH_BYTES],
-	pub data: Vec<u8>,
-	#[serde(skip,default="SystemTime::now")]
+	#[serde(skip,default="last_sent")]
 	pub last_sent: SystemTime,
 }
 
 impl Packet {
-	pub fn from_bytes(data: Vec<u8>, priv_key: &PrivateKey, pub_key: &PublicKey) -> Option<Self> { //decrypt packet (2nd layer)
-		let mut data = priv_key.decrypt(data).unwrap_or(Vec::new());
-		if data.len() < mem::size_of::<PublicKey>() { return None; }
-		let to = PublicKey::pop_bytes(&mut data);
-		Some(Self {
-			relative_key: to.relative_to(pub_key),
-			to,
-			data,
-			last_sent: SystemTime::now() - Duration::from_secs(settings().resend_delay),
-		})
-	}
-	
-	pub fn to_bytes(&self, key: &PublicKey) -> Vec<u8> { //encrypt it as a bytestream for the target public key (2nd layer)
-		let mut data = self.data.clone();
-		self.to.push_bytes(&mut data);
-		let r = key.encrypt(&self.data);
-		if r.len() > MAX_PACKET_BYTES {
-			println!("error packet is too large: {}",r.len());
-		}
-		r
-	}
-	
-	pub fn decrypt(self, key: &PrivateKey) -> Option<Message> { //decypt inner message (1st layer)
-		if self.data.len() < key.min_decrypt_len() { return None; }
-		let mut data = key.decrypt(self.data).unwrap_or(Vec::new());
-		let mut signature = [0; SIGNATURE_BYTES];
-		if data.len() < signature.len() { return None; }
-		for i in (0..signature.len()).rev() {
-			signature[i] = data.pop().unwrap();
-		}
-		if let Ok(message) = deserialize::<Message>(&data) {
-			if message.from.verify(signature, &data) {
-				Some(message)
+	pub fn decrypt(self, key: &PrivateKey) -> Option<Message> {
+		if let Some(key) = SymmetricKey::from_buf(&self.symm_key, key) {
+			let data = key.decrypt(&self.data);
+			if let Ok(msg) = deserialize::<Message>(&data) {
+				if msg.from.verify(msg.signature, &msg.hash(), &self.to) {
+					Some(msg)
+				} else {
+					None
+				}
 			} else {
 				None
 			}
@@ -54,16 +36,58 @@ impl Packet {
 		}
 	}
 	
-	pub fn encrypt(from: (&PrivateKey, &PublicKey), to: PublicKey, msg: &Message) -> Self { //encrypt the inner message and construct a packet out of it (1st layer)
-		let mut data = serialize(msg);
-		let signature = from.0.sign(&data, &to);
-		data.extend_from_slice(&signature);
-		let data = to.encrypt(&data);
+	pub fn encrypt(to: PublicKey, msg: &Message) -> Self {
+		let symm_key = SymmetricKey::new();
+		let data = serialize(msg);
+		let data = symm_key.encrypt(&data);
 		Self {
-			relative_key: to.relative_to(from.1),
+			relative_key: to.relative_to(&msg.from),
+			symm_key: to.encrypt(&symm_key.0).try_into().expect("wrong size vec when encrypting"),
 			to,
 			data,
 			last_sent: SystemTime::now() - Duration::from_secs(settings().resend_delay),
 		}
+	}
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+pub struct RawPacket { //layer 2 encryption
+	#[serde(with="serde_256_array")]
+	pub symm_key: [u8; KEY_BYTES], //symm key encrypted with rsa
+	pub data: Vec<u8>, //data encrypted with the symm key
+}
+
+impl RawPacket {
+	pub fn encrypt(packet: &Packet, key: &PublicKey) -> Self {
+		let symm_key = SymmetricKey::new();
+		let data = serialize(packet);
+		let data = symm_key.encrypt(&data);
+		Self {
+			symm_key: key.encrypt(&symm_key.0).try_into().expect("wrong size vec when encrypting"),
+			data,
+		}
+	}
+	
+	pub fn decrypt(&self, key: &PrivateKey) -> Option<Packet> {
+		if let Some(key) = SymmetricKey::from_buf(&self.symm_key, key) {
+			let data = key.decrypt(&self.data);
+			deserialize(&data).ok()
+		} else {
+			None
+		}
+	}
+}
+
+mod serde_256_array {
+	//TODO fix this hack that probably breaks when endianness is different
+	use serde::{Serialize,Deserialize,Serializer,Deserializer};
+	pub fn serialize<S: Serializer>(x: &[u8; 256], serializer: S) -> Result<S::Ok, S::Error> {
+		let x: &[u64; 32] = unsafe { std::mem::transmute(x) };
+		x.serialize(serializer)
+	}
+	
+	pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 256], D::Error> {
+		let x = <[u64; 32]>::deserialize(deserializer)?;
+		Ok(unsafe { std::mem::transmute(x) })
 	}
 }

@@ -1,8 +1,9 @@
-//this could be more efficient if we switched to u64
+//TODO: this could be more efficient if we switched to u64. it would be further breaking from standard sha tho
+
 
 pub const HASH_BYTES: usize = 32;
 
-const BLOCK_WORDS: usize = 64;
+const BLOCK_BYTES: usize = 64;
 const INITIAL_STATE: [u32; 8] = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225];
 const HASH_CONSTANTS: [u32; 64] = [
 	1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
@@ -17,10 +18,11 @@ const HASH_CONSTANTS: [u32; 64] = [
 
 pub fn hash(data: &[u8]) -> [u8; HASH_BYTES] {
 	let mut state = INITIAL_STATE;
-	let iter = data.chunks_exact(BLOCK_WORDS);
+	let iter = data.chunks_exact(BLOCK_BYTES);
 	let remainder = iter.remainder();
 	for chunk in iter {
-		process_chunk(&mut state, chunk);
+		use std::convert::TryInto;
+		process_chunk(&mut state, chunk.try_into().unwrap());
 	}
 	/*
 	//this can be done for exact adherence to sha2, but just xoring the length is faster and simpler
@@ -34,14 +36,14 @@ pub fn hash(data: &[u8]) -> [u8; HASH_BYTES] {
 		process_chunk(&mut state, &last);
 	}
 	*/
-	let mut last = [0; BLOCK_WORDS];
+	let mut last = [0; BLOCK_BYTES];
 	for i in 0..remainder.len() {
 		last[i] = remainder[i];
 	}
 	for i in 0..8 {
-		last[BLOCK_WORDS+i-8] ^= (data.len() as u64).to_be_bytes()[i];
+		last[BLOCK_BYTES+i-8] ^= (data.len() as u64).to_be_bytes()[i];
 	}
-	process_chunk(&mut state, &last);
+	process_chunk(&mut state, last);
 	let mut result = [0; HASH_BYTES];
 	for i in 0..8 {
 		for j in 0..4 {
@@ -51,7 +53,7 @@ pub fn hash(data: &[u8]) -> [u8; HASH_BYTES] {
 	result
 }
 
-fn process_chunk(state: &mut [u32; 8], chunk: &[u8]) {
+fn process_chunk(state: &mut [u32; 8], chunk: [u8; BLOCK_BYTES]) {
 	let mut w = [0; 64];
 	for i in 0..16 {
 		w[i] = u32::from_be_bytes([chunk[4*i], chunk[4*i+1], chunk[4*i+2], chunk[4*i+3]]);
