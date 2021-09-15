@@ -21,8 +21,8 @@ pub macro l() {
 }
 
 pub fn serialize<T: Serialize>(x: &T) -> Vec<u8> {
-	rmp_serde::to_vec(x).expect(l!())
+	postcard::to_stdvec(x).expect(l!())
 }
 pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
-	Ok(rmp_serde::from_read_ref(data)?)
+	Ok(postcard::from_bytes(data)?)
 }

@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-pub const IN_PORT: u16 = 36107;
+pub const IN_PORT: u16 = 36108;
 pub const OUTPORT: u16 = 36108; //these are just different for testing with 2 clients on the same computer, for actual use they should be merged
 
 #[derive(Clone,Serialize,Deserialize)]

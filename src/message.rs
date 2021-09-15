@@ -2,8 +2,8 @@ use crate::prelude::*;
 
 #[derive(Clone,Serialize,Deserialize,Debug)]
 pub struct Message {
-	pub from: PublicKey,
-	pub time: SystemTime,
+	pub from: PublicKey, //TODO: this 
+	pub time: SystemTime, //TODO: this takes up 96 bytes in serialization, that could maybe be reduced a lot
 	pub typ: MessageType,
 	#[serde(with="serde_64_array")]
 	pub signature: [u8; SIGNATURE_BYTES],

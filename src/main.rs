@@ -58,15 +58,6 @@ fn main() {
 		},
 	};
 	let (priv_key, pub_key) = PrivateKey::from_phrase(passphrase.as_bytes());
-	/*let peers = vec![ //create a default peer file to be given to other people for bootstrapping
-		Peer {
-			ip: std::net::Ipv4Addr::new(0,0,0,0).into(),
-			key: pub_key.clone(),
-			last_online: SystemTime::now(),
-			relative_key: Default::default(),
-		}
-	];
-	write_file(&peers, format!("{}/peers.ron",settings().folder)).unwrap();*/
 	let mut peers: Vec<Peer> = match read_file(format!("{}/peers.ron",settings().folder)) {
 		Ok(x) => x,
 		Err(e) => {
@@ -77,6 +68,7 @@ fn main() {
 	//TODO: check whether the error was due to permissions or the file not existing
 	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or(Vec::new());
 	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or(Vec::new());
+	//TODO: periodically generate a new packet for each sent message and send them off
 	let mut sent_messages: HashMap<[u8; HASH_BYTES], Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or(HashMap::new());
 	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or(Vec::new());
 	packets.iter_mut().for_each(|p| p.relative_key = p.to.relative_to(&pub_key));
@@ -85,18 +77,20 @@ fn main() {
 	let mut last_punch = SystemTime::now() - Duration::from_secs(settings().punch_delay);
 	let mut connected = Vec::new();
 	let mut connected_map = HashMap::new();
-	let mut buf = vec![0; MAX_PACKET_BYTES];
+	let mut buf = [0; MAX_PACKET_BYTES];
 	'a: loop {
 		while let Ok((len, addr)) = socket.recv_from(&mut buf) {
+			let mut raw_packet = None;
 			if len != 0 {
 				println!("packet len {}",len);
+				raw_packet = deserialize::<RawPacket>(&buf).ok();
+				buf = [0; MAX_PACKET_BYTES];
 			}
-			if let Ok(raw_packet) = deserialize::<RawPacket>(&buf) {
+			if let Some(raw_packet) = raw_packet {
 				println!("got raw packet {}",raw_packet.data.len());
 				if let Some(packet) = raw_packet.decrypt(&priv_key) {
 					println!("got packet {}",packet.data.len());
 					if packet.to == pub_key {
-						println!("got packet meant for us");
 						if let Some(msg) = packet.decrypt(&priv_key) {
 							if let MessageType::Message(text) = &msg.typ {
 								for i in 0..friends.len() {
@@ -126,6 +120,8 @@ fn main() {
 								packets.push(packet);
 							}
 							messages.push(msg);
+						} else {
+							println!("failed to decrypt packet");
 						}
 					} else {
 						packets.push(packet);
@@ -144,7 +140,6 @@ fn main() {
 					connected.sort_unstable_by_key(|x| x.relative_key);
 				}
 			}
-			buf = vec![0; MAX_PACKET_BYTES];
 		}
 		'b: for command in terminal.try_iter() {
 			match command {
@@ -167,7 +162,6 @@ fn main() {
 							};
 							let hash = msg.hash();
 							msg.signature = priv_key.sign(&hash, &friend.key);
-							println!("sending: {:?}",msg);
 							let packet = Packet::encrypt(friend.key.clone(), &msg);
 							sent_messages.insert(hash, packet.clone());
 							packets.push(packet);
@@ -187,17 +181,17 @@ fn main() {
 			}
 		}
 		if connected.len() > 0 {
-			for packet in packets.iter_mut() {
-				if SystemTime::now() > packet.last_sent + Duration::from_secs(settings().resend_delay) {
-					packet.last_sent = SystemTime::now();
-					let mut i = connected.len() - 1;
-					while connected[i].relative_key > packet.relative_key && i != 0 {
-						i -= 1;
+			for i in (0..packets.len()).rev() { //iterate in reverse so it doesn't break when we call Vec::remove
+				if SystemTime::now() > packets[i].last_sent + Duration::from_secs(settings().resend_delay) {
+					packets[i].last_sent = SystemTime::now();
+					let mut j = connected.len() - 1;
+					while connected[j].relative_key > packets[i].relative_key && i != 0 {
+						j -= 1;
 					}
-					if connected[i].relative_key <= packet.relative_key {
-						println!("sending packet to {}",connected[i].ip);
-						if let Err(e) = connected[i].send(&socket, packet) {
-							println!("error sending packet to {}: {}",connected[i].ip,e);
+					if connected[j].relative_key <= packets[i].relative_key {
+						match connected[i].send(&socket, &packets[i]) {
+							Ok(()) => { packets.remove(i); },
+							Err(e) => println!("error sending packet to {}: {}",connected[j].ip,e),
 						}
 					}
 				}
