@@ -1,6 +1,5 @@
 //TODO: this could be more efficient if we switched to u64. it would be further breaking from standard sha tho
 
-
 pub const HASH_BYTES: usize = 32;
 
 const BLOCK_BYTES: usize = 64;

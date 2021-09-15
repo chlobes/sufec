@@ -76,7 +76,6 @@ impl SymmetricKey {
 	}
 	
 	pub fn encrypt(mut self, data: &[u8]) -> Vec<u8> {
-		//println!("encrypting with symm_key: {:?}",self.0);
 		let mut result = Vec::new();
 		for chunk in data.chunks(self.0.len()) {
 			for i in 0..chunk.len() {

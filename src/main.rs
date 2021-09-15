@@ -87,9 +87,9 @@ fn main() {
 				buf = [0; MAX_PACKET_BYTES];
 			}
 			if let Some(raw_packet) = raw_packet {
-				println!("got raw packet {}",raw_packet.data.len());
+				//println!("got raw packet {}",raw_packet.data.len());
 				if let Some(packet) = raw_packet.decrypt(&priv_key) {
-					println!("got packet {}",packet.data.len());
+					//println!("got packet {}",packet.data.len());
 					if packet.to == pub_key {
 						if let Some(msg) = packet.decrypt(&priv_key) {
 							if let MessageType::Message(text) = &msg.typ {
@@ -163,10 +163,11 @@ fn main() {
 							let hash = msg.hash();
 							msg.signature = priv_key.sign(&hash, &friend.key);
 							let packet = Packet::encrypt(friend.key.clone(), &msg);
+							messages.push(msg);
 							sent_messages.insert(hash, packet.clone());
 							packets.push(packet);
+							break 'b;
 						}
-						break 'b;
 					}
 					println!("no friend found with name: {}",target);
 				}
