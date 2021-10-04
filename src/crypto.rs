@@ -31,7 +31,7 @@ impl PrivateKey {
 	
 	pub fn decrypt(&self, data: &[u8]) -> Option<Vec<u8>> {
 		let padding = PaddingScheme::new_pkcs1v15_encrypt();
-		self.0.decrypt(padding, &data).ok()
+		self.0.decrypt(padding, data).ok()
 	}
 }
 
@@ -72,7 +72,7 @@ impl SymmetricKey {
 	pub fn from_buf(buf: &[u8], key: &PrivateKey) -> Option<Self> {
 		key.decrypt(buf)
 			.and_then(|buf| buf.try_into().ok())
-			.map(|buf| SymmetricKey(buf))
+			.map(SymmetricKey)
 	}
 	
 	pub fn encrypt(mut self, data: &[u8]) -> Vec<u8> {

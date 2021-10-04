@@ -21,8 +21,8 @@ impl terminal::Parse for Command {
 			"write_pub_key" => Some(WritePubKey(words.get(1).map(|x| x.to_string()))),
 			"send" => if let Some(name) = words.get(1) {
 				let mut r = String::new();
-				for i in 2..words.len() {
-					r += words[i];
+				for word in words.iter().skip(2) {
+					r += word;
 					r += " ";
 				}
 				r.pop();

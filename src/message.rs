@@ -3,7 +3,7 @@ use crate::prelude::*;
 #[derive(Clone,Serialize,Deserialize,Debug)]
 pub struct Message {
 	pub from: PublicKey, //TODO: this 
-	pub time: SystemTime, //TODO: this takes up 96 bytes in serialization, that could maybe be reduced a lot
+	pub time: SystemTime, //TODO: this takes up more space than it needs to in serialization
 	pub typ: MessageType,
 	#[serde(with="serde_64_array")]
 	pub signature: [u8; SIGNATURE_BYTES],
@@ -24,7 +24,8 @@ pub enum MessageType {
 	//Seen([u8; HASH_BYTES]),
 	//NewGroup(GroupId, String),
 	Rename(String),
-	RequestPeer(PublicKey, IpAddr),
+	PeerRequest, //the polled peer should return the nearest peer it knows to msg.from + 2^n
+	PeerReply(PublicKey, IpAddr), //these messages should be sent in pairs
 }
 
 mod serde_64_array {

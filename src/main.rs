@@ -1,4 +1,5 @@
 #![feature(decl_macro)]
+#![allow(clippy::needless_range_loop,clippy::map_entry)]
 
 use prelude::*;
 mod prelude;
@@ -66,11 +67,11 @@ fn main() {
 		},
 	};
 	//TODO: check whether the error was due to permissions or the file not existing
-	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or(Vec::new());
-	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut friends: Vec<Friend> = read_file(format!("{}/friends.ron",settings().folder)).unwrap_or_default();
+	let mut messages: Vec<Message> = read_file(format!("{}/messages.ron",settings().folder)).unwrap_or_default();
 	//TODO: periodically generate a new packet for each sent message and send them off
-	let mut sent_messages: HashMap<[u8; HASH_BYTES], Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or(HashMap::new());
-	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or(Vec::new());
+	let mut sent_messages: HashMap<[u8; HASH_BYTES], Packet> = read_file(format!("{}/sent_messages.ron",settings().folder)).unwrap_or_default();
+	let mut packets: Vec<Packet> = read_file(format!("{}/packets.ron",settings().folder)).unwrap_or_default();
 	packets.iter_mut().for_each(|p| p.relative_key = p.to.relative_to(&pub_key));
 	let terminal = terminal::Terminal::start();
 	let mut limiter = limiter::Limiter::from_tps(100.0);
@@ -93,9 +94,9 @@ fn main() {
 					if packet.to == pub_key {
 						if let Some(msg) = packet.decrypt(&priv_key) {
 							if let MessageType::Message(text) = &msg.typ {
-								for i in 0..friends.len() {
-									if friends[i].key == msg.from {
-										print!("msg from {}",friends[i].name);
+								for friend in friends.iter() {
+									if friend.key == msg.from {
+										print!("msg from {}",friend.name);
 										break;
 									}
 								}
@@ -134,6 +135,7 @@ fn main() {
 					i += 1;
 				}
 				if i < peers.len() {
+					peers[i].last_online = SystemTime::now();
 					peers[i].relative_key = peers[i].key.relative_to(&pub_key);
 					connected_map.insert(addr.ip(), peers[i].clone());
 					connected.push(peers[i].clone());
@@ -181,7 +183,7 @@ fn main() {
 				}
 			}
 		}
-		if connected.len() > 0 {
+		if !connected.is_empty() {
 			for i in (0..packets.len()).rev() { //iterate in reverse so it doesn't break when we call Vec::remove
 				if SystemTime::now() > packets[i].last_sent + Duration::from_secs(settings().resend_delay) {
 					packets[i].last_sent = SystemTime::now();
@@ -200,7 +202,7 @@ fn main() {
 		}
 		limiter.sleep();
 	}
-	if connected.len() > 0 { //dump all the packets we're holding onto
+	if !connected.is_empty() { //dump all the packets we're holding onto
 		packets.iter().for_each(|x| { let _ = connected[0].send(&socket, x); });
 	}
 	if let Err(e) = write_file(&peers, format!("{}/peers.ron",settings().folder)) {
@@ -268,7 +270,7 @@ fn create_passphrase() -> Result<String> {
 		let words: Vec<_> = include_str!("wordlist.txt").lines().collect();
 		for _ in 0..12 {
 			let i: usize = rand::random();
-			r.push_str(&words[i % words.len()]);
+			r.push_str(words[i % words.len()]);
 			r.push(' ');
 		}
 		r.pop();

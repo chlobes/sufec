@@ -36,9 +36,7 @@ pub fn hash(data: &[u8]) -> [u8; HASH_BYTES] {
 	}
 	*/
 	let mut last = [0; BLOCK_BYTES];
-	for i in 0..remainder.len() {
-		last[i] = remainder[i];
-	}
+	last[..remainder.len()].clone_from_slice(remainder);
 	for i in 0..8 {
 		last[BLOCK_BYTES+i-8] ^= (data.len() as u64).to_be_bytes()[i];
 	}
