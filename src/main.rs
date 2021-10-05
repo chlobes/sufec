@@ -15,10 +15,12 @@ use terminal_command::*;
 
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
+	// if an argument is passed, it's the settings folder name
 	if let Some(folder) = args.get(1) {
 		unsafe {
 			SETTINGS.folder = Box::leak(folder.clone().into_boxed_str());
 		}
+	// otherwise the settings folder is ~/.sufec
 	} else if let Some(x) = home::home_dir() {
 		if let Some(x) = x.to_str() {
 			let folder = format!("{}/.sufec",x);
@@ -27,6 +29,7 @@ fn main() {
 			}
 		}
 	}
+	// create the settings folder if it doesn't exist
 	match std::fs::create_dir(settings().folder) {
 		Ok(()) => {},
 		Err(e) => if e.kind() != std::io::ErrorKind::AlreadyExists {
@@ -34,13 +37,16 @@ fn main() {
 			return;
 		}
 	}
+	// read settings
 	match read_file(format!("{}/settings.ron",settings().folder)) {
 		Ok(x) => unsafe { SETTINGS = x; },
 		Err(e) => {
+			// if we couldn't read it, write default settings
 			println!("couldn't read settings: {}, using default",e);
 			let _ = write_file(settings(), format!("{}/settings.ron",settings().folder));
 		},
 	}
+	// start listener socket
 	let socket = match UdpSocket::bind(("0.0.0.0", IN_PORT)).and_then(|x| x.set_nonblocking(true).map(|_| x)) {
 		Ok(x) => x,
 		Err(e) => {
@@ -58,6 +64,7 @@ fn main() {
 			return;
 		},
 	};
+	// generate keypair from passphrase
 	let (priv_key, pub_key) = PrivateKey::from_phrase(passphrase.as_bytes());
 	let mut peers: Vec<Peer> = match read_file(format!("{}/peers.ron",settings().folder)) {
 		Ok(x) => x,
